@@ -1,0 +1,235 @@
+```{r message = FALSE, warning = TRUE, echo = FALSE}
+setwd("~/RNAseq-Elisa/")
+options(stringsAsFactors = FALSE)
+
+library(DESeq2)
+library(tximport)
+library(tidyverse)
+library(pheatmap)
+library(viridis)
+library(rmarkdown)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(biomaRt)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(ReactomePA)
+library(ggplot2)
+library(reshape2)
+library(edgeR)
+library(SummarizedExperiment)
+library(WGCNA)
+library(variancePartition)
+library(RUVSeq)
+library(RColorBrewer)
+library(EDASeq)
+```
+
+## Preprocessing of transcriptomic data
+
+```{r message = FALSE, warning = TRUE, echo = FALSE}
+setwd("~/Documents/GitHub/my_library/RNAseq-Elisa/")
+samples <- data.frame(individual = as.factor(c("P1","C1","C2","C3","C4","C5","C6","C7","Ed1","P1","P2","P4","P4","P5","P6","P8","P9","P11","P12","P14","C1","C2","P5","C3","C4","C5","C6","C7","Ed1","P6","P8","P9","P11","P12","P14")), 
+                      age = as.numeric(c("23","27","25","27","25","46","50","9","25","23","14","10","10","5","39","4","10","29","7","17","27","25","5","27","25","46","50","9","25","39","4","10","29","7","17")),
+                      sex = as.factor(c("male","female","male","male","female","female","male","male","female","male","female","female","female","male","male","female","male","female","female","male","female","male","male","male","female","female","male","male","female","male","female","male","female","female","male")), 
+                      condition = as.factor(c("patient","control","control","control","control","control","control","control","patient","patient","patient","patient","patient","patient","patient","patient","patient","patient","patient","patient","control","control","patient","control","control","control","control","control","patient","patient","patient","patient","patient","patient","patient")),
+                      mut_type = as.factor(c("del","control","control","control","control","control","control","control","point","del","del","del","del","del","del","del","del","point","point","point","control","control","del","control","control","control","control","control","point","del","del","del","point","point","point")),
+                      row.names = gsub("(.+?)(\\_.*)", "\\1", list.files(pattern = "*genes.results")),
+                      sample = as.factor(gsub("(.+?)(\\_.*)", "\\1", list.files(pattern = "*genes.results"))))
+
+files <- list.files(pattern = "*genes.results")
+names(files) <- gsub("(.+?)(\\_.*)", "\\1", files)
+all(file.exists(files))
+
+txi = tximport(files, type = "rsem", txIn = FALSE, txOut = FALSE)
+txi$length[txi$length == 0] = 0.01
+
+dds <- DESeqDataSetFromTximport(txi, colData = samples, design = ~condition)
+dds <- collapseReplicates(dds, dds$individual, dds$sample)
+smallestGroupSize <- 14
+keep <- rowSums(counts(dds) >= 10) >= smallestGroupSize
+dds <- dds[keep,]
+dds <- DESeq(dds)
+
+exp_file <- counts(dds)
+dup_genes <- gsub(".*_","",rownames(exp_file))
+exp_file <- exp_file[!duplicated(dup_genes),]
+exp_file <- as.data.frame(exp_file)
+exp_file$SYMBOL <- gsub(".*_","",rownames(exp_file))
+exp_file <- exp_file[,c(36,1:35)]
+```
+
+## PCA plots (individuals)
+
+```{r message = FALSE, warning = TRUE, echo = FALSE}
+vsd <- vst(dds, blind = TRUE)
+pca <- plotPCA(vsd, intgroup = "individual")
+nudge <- position_nudge(y = 3)
+pca + geom_text(aes(label = rownames(dds@colData)), colour = "black", alpha = 0.5, position = nudge)
+```
+
+## PCA plots (groups)
+
+```{r message = FALSE, warning = TRUE, echo = FALSE}
+vsd <- vst(dds, blind = TRUE)
+pca <- plotPCA(vsd, intgroup = "condition")
+nudge <- position_nudge(y = 3)
+pca + geom_text(aes(label = rownames(dds@colData)), colour = "black", position = nudge)
+```
+
+## PCA plots (sex)
+
+```{r message = FALSE, warning = TRUE, echo = FALSE}
+vsd <- vst(dds, blind = TRUE)
+pca <- plotPCA(vsd, intgroup = "sex")
+nudge <- position_nudge(y = 3)
+pca + geom_text(aes(label = rownames(dds@colData)), colour = "black", position = nudge)
+```
+No correction needed, groups are paired by sex.
+
+```{r message = FALSE, warning = TRUE, echo = FALSE}
+table(samples$sex,samples$condition)
+```
+## PCA plots (age)
+
+```{r message = FALSE, warning = TRUE, echo = FALSE}
+vsd <- vst(dds, blind = TRUE)
+pca <- plotPCA(vsd, intgroup = "age")
+nudge <- position_nudge(y = 3)
+pca + geom_text(aes(label = rownames(dds@colData)), colour = "black", position = nudge)
+```
+
+## PCA plots (mutation type)
+
+```{r message = FALSE, warning = TRUE, echo = FALSE}
+vsd <- vst(dds, blind = TRUE)
+pca <- plotPCA(vsd, intgroup = "mut_type")
+nudge <- position_nudge(y = 3)
+pca + geom_text(aes(label = rownames(dds@colData)), colour = "black", position = nudge)
+```
+
+## Counts distribution
+Counts distribution is different between samples, normalizing is important for tests where genes are not tested individually
+
+```{r message = FALSE, warning = TRUE, echo = FALSE}
+rownames(exp_file) <- exp_file$SYMBOL
+exp_file_ruvseq <- exp_file[,-1]
+set <- newSeqExpressionSet(as.matrix(exp_file_ruvseq),
+                           phenoData = data.frame(samples, row.names=colnames(exp_file_ruvseq)))
+#set
+
+colors <- brewer.pal(2, "Set1")
+plotRLE(set, outline=FALSE, ylim=c(-4, 4), col=colors[samples$condition])
+```
+## Sequencing depth normalization
+
+```{r message = FALSE, warning = TRUE, echo = FALSE}
+set <- betweenLaneNormalization(set, which="upper")
+plotRLE(set, outline=FALSE, ylim=c(-4, 4), col=colors[samples$condition])
+```
+
+## Normalized date PCA
+
+```{r message = FALSE, warning = TRUE, echo = FALSE}
+plotPCA(set, col=colors[samples$condition], cex=1.2)
+```
+
+## Housekeeping genes expression
+
+- General housekeeping genes:
+https://doi.org/10.1016/j.tig.2014.02.001: "C1orf43", "CHMP2A", "EMC7", "GPI", "PSMB2", "PSMB4", "RAB7A", "REEP5", "SNRPD3", "VCP", "VPS29"
+- Brain housekeeping genes:
+https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5112547/: "UBE2D2", "CYC1", "RPL13"
+
+### Batch1
+
+```{r message = FALSE, warning = TRUE, echo = FALSE}
+housekeeping_genes <- c("C1orf43", "CHMP2A", "EMC7", "GPI", "PSMB2", "PSMB4", "RAB7A", "REEP5", "SNRPD3", "VCP", "VPS29", "UBE2D2", "CYC1", "RPL13")
+exp_file_normalized <- as.data.frame(counts(set))
+hg_exp <- exp_file_normalized[rownames(exp_file_normalized) %in% housekeeping_genes,]
+hg_exp$genes <- rownames(hg_exp)
+hg_melt <- melt(hg_exp, id.vars= "genes")
+hg_melt1 <- hg_melt[hg_melt$variable %in% samples$sample[1:12],]
+
+hg_melt1 %>%
+  ggplot(aes(x=reorder(genes,value), y=value, group=variable, color=variable)) +
+    geom_line() + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+### Batch2
+
+```{r message = FALSE, warning = TRUE, echo = FALSE}
+hg_melt2 <- hg_melt[hg_melt$variable %in% samples$sample[13:24],]
+
+hg_melt2 %>%
+  ggplot(aes(x=reorder(genes,value), y=value, group=variable, color=variable)) +
+    geom_line() + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+### Batch3
+
+```{r message = FALSE, warning = TRUE, echo = FALSE}
+hg_melt3 <- hg_melt[hg_melt$variable %in% samples$sample[25:35],]
+
+hg_melt3 %>%
+  ggplot(aes(x=reorder(genes,value), y=value, group=variable, color=variable)) +
+    geom_line() + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+- Hierarchical clustering of normalized counts
+
+```{r message = FALSE, warning = TRUE, echo = FALSE}
+sampleTree = hclust(dist(t(exp_file_normalized)), method = "average")
+par(mar = c(0, 0, 0, 0))
+
+traitData <- samples
+traitData$condition <- recode(traitData$condition, "control" = 0, "patient" = 1)
+traitColors = numbers2colors(traitData$condition, colors = c("chartreuse3","indianred1"))
+
+
+p <- plotDendroAndColors(sampleTree, traitColors,
+                    groupLabels = names(traitData$Sex),
+                    main = "Sample dendrogram (colors represent condition)")
+p
+```
+
+## Simple deconvolution
+
+```{r message = FALSE, warning = TRUE, echo = FALSE}
+library(BRETIGEA)
+library(viridis)
+library(hrbrthemes)
+
+input_deconv <- exp_file_normalized
+#rownames(input_deconv) <- input_deconv$SYMBOL
+#input_deconv <- input_deconv[,-1]
+ct_res = brainCells(input_deconv, nMarker = 100)
+
+ct_res_melt = melt(ct_res)
+
+#pdf("heatmap-deconv.pdf", width=8, height=8)
+ggplot(ct_res_melt, aes(Var2, Var1, fill= value)) + 
+  geom_tile() +
+  scale_fill_viridis(discrete=FALSE, limits=c(-1, 1), breaks=seq(-1,1,by=0.25)) +
+  theme_ipsum()
+```
+
+## Gene expression of main neuron markers
+
+```{r message = FALSE, warning = TRUE, echo = FALSE}
+neuron_list <- read.table("~/RNAseq-Elisa/neuron_markers.txt")[,1]
+exp_file_normalized$SYMBOL <- rownames(exp_file_normalized)
+neuron_counts <- subset(exp_file_normalized, SYMBOL %in% neuron_list)
+melted_neuron_counts <- melt(neuron_counts)
+
+#ggplot(data=melted_neuron_counts, aes(x=SYMBOL, y= variable ) )+ 
+#  geom_point(aes(color=log2(value), size = 20)) + theme(axis.text.x = element_text(angle = 90, #vjust = 0.5, hjust=1))
+
+png("~/RNAseq-Elisa/neuron_markers_Papes.png", units="in", width=8, height=6, res=800)
+
+ggplot(data=melted_neuron_counts, aes(SYMBOL, variable, fill= log2(value))) + 
+  geom_tile() +
+  scale_fill_viridis(discrete=FALSE) +
+  theme_ipsum() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+dev.off()
+```
