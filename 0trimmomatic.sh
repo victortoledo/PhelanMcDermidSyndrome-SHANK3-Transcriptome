@@ -1,0 +1,1 @@
+time java -jar /usr/local/Trimmomatic-0.39/trimmomatic-0.39.jar PE -threads 48 ${INPUT_FOLDER}/${i}_R1.fastq.gz ${INPUT_FOLDER}/${i}_R2.fastq.gz ${OUTPUT_FOLDER}/${i}_R1_paired.fq.gz ${OUTPUT_FOLDER}/${i}_R1_unpaired.fq.gz ${OUTPUT_FOLDER}/${i}_R2_paired.fq.gz ${OUTPUT_FOLDER}/${i}_R2_unpaired.fq.gz LEADING:3 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:36
