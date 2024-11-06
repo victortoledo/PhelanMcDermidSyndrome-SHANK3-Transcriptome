@@ -1,0 +1,4 @@
+rsem-calculate-expression -p 20 --paired-end --bam --estimate-rspd --append-names \
+        --output-genome-bam ${INPUT_FOLDER}/${i}_STAR_GRCh38Aligned.toTranscriptome.out.bam \
+        ${INPUT_FOLDER}/star-human-gencode \
+        ${OUTPUT_FOLDER}/${i}_STAR_RSEM_quantified
