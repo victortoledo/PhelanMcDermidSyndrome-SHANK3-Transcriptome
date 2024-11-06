@@ -1,0 +1,175 @@
+---
+title: "differential Expression DESeq2"
+author: "Victor Toledo"
+date: '2023-08-04'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(stringsAsFactors = FALSE)
+```
+
+## Differential expression analysis using DESeq2
+
+```{r message = FALSE, warning = TRUE, echo = FALSE}
+library(DESeq2)
+library(tximport)
+library(tidyverse)
+library(pheatmap)
+library(viridis)
+library(rmarkdown)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(biomaRt)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(ReactomePA)
+library(ggplot2)
+library(reshape2)
+```
+- Create the design matrix
+- Import counts from quantification files
+
+```{r message = FALSE}
+setwd("~/RNAseq-Elisa/quantification")
+
+samples <- data.frame(
+  individual = as.factor(c("P1","C1","C2","C3","C4","C6","C7","Ed1","P1","P2","P4","P4","P5","P6","P8","P9","P11","P12","P14","C2","P5","C3","C4","C6","C7","Ed1","P6","P8","P9","P11","P12","P14")),
+  age = as.numeric(c("23","27","25","27","25","50","9","25","23","14","10","10","5","39","4","10","29","7","17","25","5","27","25","50","9","25","39","4","10","29","7","17")),
+  sex = as.factor(c("male","female","male","male","female","male","male","female","male","female","female","female","male","male","female","male","female","female","male","male","male","male","female","male","male","female","male","female","male","female","female","male")),
+  condition = as.factor(c("patient","control","control","control","control","control","control","patient","patient","patient","patient","patient","patient","patient","patient","patient","patient","patient","patient","control","patient","control","control","control","control","patient","patient","patient","patient","patient","patient","patient")),
+  mut_type = as.factor(c("del","NA","NA","NA","NA","NA","NA","point","del","del","del","del","del","del","del","del","point","point","point","NA","del","NA","NA","NA","NA","point","del","del","del","point","point","point")),
+  row.names = gsub("(.+?)(\\_.*)", "\\1", list.files(pattern = "*quant.sf")),
+  sample = as.factor(gsub("(.+?)(\\_.*)", "\\1", list.files(pattern = "*quant.sf")))
+)
+
+txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene
+
+k <- keys(txdb, keytype = "TXNAME")
+tx2gene <- AnnotationDbi::select(txdb, k, "GENEID", "TXNAME")
+tx2gene <- na.omit(tx2gene)
+
+files <- list.files(pattern = "*quant.sf")
+names(files) <- gsub("(.+?)(\\_.*)", "\\1", files)
+all(file.exists(files))
+
+txi <- tximport(files, type = "rsem", tx2gene = tx2gene)
+#txi_TPM <- tximport(files, type = "salmon", countsFromAbundance = "scaledTPM",tx2gene = tx2gene)
+```
+
+## Creating DESeq2 object to test for differential expression
+
+```{r}
+dds <- DESeqDataSetFromTximport(txi, colData = samples, design = ~condition)
+ddsCollapsed <- collapseReplicates(dds, dds$individual, dds$sample)
+ddsCollapsed <- DESeq(ddsCollapsed)
+res <- results(ddsCollapsed, coef = "condition_patient_vs_control")
+```
+
+### Tabela com resultados totais: CONTROLE x PACIENTE
+
+```{r}
+formated_res <- as.data.frame(res) %>%
+  rownames_to_column("gene") %>%
+  arrange(desc(abs(log2FoldChange))) %>%
+  mutate(significative = if_else(padj < 0.05, "yes", "no")) %>%
+  mutate(up = if_else(log2FoldChange < 0, "control", "primario"))
+gene_symbols = bitr(formated_res$gene,fromType="ENTREZID",toType="SYMBOL",OrgDb="org.Hs.eg.db")
+formated_res %>% left_join(gene_symbols,by=c("gene" = "ENTREZID")) -> formated_res
+paged_table(formated_res)
+write.table(formated_res, file = "~/RNAseq-Elisa/patient_vs_control_diff_genes.txt", row.names = FALSE, sep = "\t", quote = FALSE)
+
+table(formated_res$significative)
+```
+
+#### Visualization
+
+```{r}
+plotMA(res)
+```
+
+```{r}
+vsd <- vst(ddsCollapsed, blind = TRUE)
+pca <- plotPCA(vsd, intgroup = "condition")
+nudge <- position_nudge(y = 3)
+pca + geom_text(aes(label = rownames(ddsCollapsed@colData)), colour = "black", position = nudge)
+```
+
+```{r}
+plotDispEsts(ddsCollapsed, ylim = c(1e-6, 1e1))
+```
+
+```{r}
+select <- order(rowMeans(counts(ddsCollapsed, normalized = TRUE)), decreasing = TRUE)[1:485]
+dfx <- as.data.frame(colData(ddsCollapsed))
+rownames(dfx) <- gsub("(.+?)(\\_.*)", "\\1", rownames(dfx))
+df.rownames <- rownames(dfx)
+df <- data.frame(condition = dfx$condition, row.names = df.rownames)
+
+ann_colors = list(condition = c(control = "#1B9E77", patient="#D95F02"))
+
+pheatmap(assay(vsd)[select, ],
+  cluster_rows = TRUE,
+  show_rownames = FALSE,
+  cluster_cols = TRUE,
+  annotation_col = df,
+  annotation_colors = ann_colors,
+  border_color = NA,
+  scale = "row"
+)
+```
+
+#### Significant genes
+```{r}
+sig <- subset(formated_res, significative == "yes")
+paged_table(sig)
+write.table(sig, file = "~/RNAseq-Elisa/patient_vs_control_sig_diff_genes.txt", row.names = FALSE, sep = "\t", quote = FALSE)
+```
+
+#### clusterProfiler GO
+```{r}
+universe <- formated_res$gene
+x <- sig$gene
+ego_BP <- enrichGO(gene     = x, #Biological Process
+                     universe      = universe,
+                     OrgDb         = org.Hs.eg.db,
+                     ont           = "BP",
+                     keyType       = 'ENTREZID',
+                     pAdjustMethod = "fdr",
+                     pvalueCutoff  = 0.05,
+                     qvalueCutoff = 0.05,
+                     minGSSize=5)
+ego_BP <- setReadable(ego_BP, OrgDb = org.Hs.eg.db)
+write.table(ego_BP, file = "~/RNAseq-Elisa/patient_vs_control_ego_BP.txt", row.names = FALSE, sep = "\t", quote = FALSE)
+```
+
+#### clusterProfiler KEGG
+```{r}
+kk <- enrichKEGG(gene = x,
+                   organism     = 'hsa',
+                   universe = universe,
+                   pAdjustMethod = "fdr",
+                   pvalueCutoff  = 0.05)
+table_kk <- kk@result
+
+write.table(kk, file = "~/RNAseq-Elisa/patient_vs_control_KEGG.txt", row.names = FALSE, sep = "\t", quote = FALSE)
+```
+
+### Plot enrichment graphs
+#### GO
+```{r}
+require(DOSE)
+dotplot(ego_BP)
+```
+
+#### KEGG
+```{r}
+require(DOSE)
+dotplot(kk)
+```
+
+#### Reactome
+```{r}
+reactome@result$Description <- gsub("Homo sapiens\r: ","",reactome@result$Description)
+dotplot(reactome, font.size = 10)
+```
