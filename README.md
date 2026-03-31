@@ -1,5 +1,5 @@
 # PhelanMcDermidSyndrome-SHANK3-Transcriptome
-This repository contains the scripts used to analyze the transcriptomic profile of iPSC-derived neurons harboring mutations in the SHANK3 gene, associated with the Phelan-McDermid Syndrome
+This repository contains the scripts used to analyze the transcriptomic profile of iPSC-derived neurons harboring mutations in the SHANK3 gene, associated with the Phelan-McDermid Syndrome. Results are published in: https://www.nature.com/articles/s41380-025-03433-y
 
 Codes are ordered according to the steps of the pipeline:
 
